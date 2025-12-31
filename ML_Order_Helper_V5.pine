@@ -1,8 +1,8 @@
 //@version=5
-indicator("ML Order Helper - Pending Order Placement & ML Training Data", overlay=false, max_bars_back=500)
+indicator("ML Order Helper - Advanced Indicators & ML Training Data", overlay=false, max_bars_back=500)
 
 // ============================================================================
-// SECTION 1: 基礎指標輸入參數
+// SECTION 1: 基础指标输入参数
 // ============================================================================
 
 rsi_src = input(close, title="RSI Source", group="RSI Settings")
@@ -27,11 +27,12 @@ sr_sensitivity = input.float(0.3, title="S/R Sensitivity (%)", minval=0.1, maxva
 
 show_base_indicators = input.bool(true, title="Show Base Indicators", group="Display")
 show_custom_indicators = input.bool(true, title="Show Custom Indicators", group="Display")
+show_advanced_indicators = input.bool(true, title="Show Advanced ML Indicators (LII, MTRI, DSRFI)", group="Display")
 show_order_levels = input.bool(true, title="Show Pending Order Levels", group="Display")
 show_ml_data = input.bool(true, title="Show ML Data Table", group="Display")
 
 // ============================================================================
-// SECTION 2: 計算基礎指標
+// SECTION 2: 计算基础指标
 // ============================================================================
 
 rsi_val = ta.rsi(rsi_src, rsi_length)
@@ -50,9 +51,10 @@ stoch_k_val = ta.sma(stoch_raw_k, stoch_smooth)
 stoch_d_val = ta.sma(stoch_k_val, stoch_d)
 
 atr_val = ta.atr(atr_length)
+atr_sma = ta.sma(atr_val, 50)
 
 // ============================================================================
-// SECTION 3: 計算自創指標
+// SECTION 3: 计算自创指标
 // ============================================================================
 
 momentum_confluence = 0.0
@@ -74,7 +76,7 @@ momentum_confluence := math.max(-100, math.min(100, momentum_confluence))
 
 bb_width = bb_upper - bb_lower
 bb_width_sma = ta.sma(bb_width, 20)
-volatility_expansion = math.min(100, (bb_width / bb_width_sma) * 50)
+volatility_expansion = math.min(100, (bb_width / (bb_width_sma + 0.0001)) * 50)
 
 price_in_bands = 50.0
 if bb_upper != bb_lower
@@ -93,7 +95,62 @@ rsi_convergence = (rsi_above_upper + rsi_below_lower) / 2
 composite_signal = (momentum_confluence + volatility_expansion + rsi_convergence) / 3
 
 // ============================================================================
-// SECTION 4: 支撐/阻力檢測 & 掛單點位計算
+// SECTION 4: 计算3个高级ML指标
+// ============================================================================
+
+// ===== 公式1: 流动性失衡指数 (LII - Liquidity Imbalance Index) =====
+lii_range = high - low
+lii_sum = high + low + 0.001
+lii_vol_ratio = volume / ta.sma(volume, 20)
+lii_base = (lii_range / lii_sum) * lii_vol_ratio
+lii = math.min(100, lii_base * 100)
+lii_normalized = normalize_value(lii, 0, 100)
+
+// ===== 公式2: 多时间框架共鸣指数 (MTRI - Multi-Timeframe Resonance Index) =====
+// RSI 共鸣度
+rsi_resonance = math.abs(rsi_val - 50) / 50
+
+// MACD 共鸣度
+macd_range = math.abs(macd_line - signal_line)
+macd_resonance = macd_range / (atr_val + 0.001)
+macd_resonance_norm = math.min(1.0, macd_resonance * 0.5)
+
+// 动量共鸣度 (ROC 12周期)
+roc_val = (close - close[12]) / close[12]
+momentum_resonance = math.abs(roc_val) * 10
+momentum_resonance_norm = math.min(1.0, momentum_resonance)
+
+// MTRI 综合
+mtri_raw = (rsi_resonance + macd_resonance_norm + momentum_resonance_norm) / 3
+mtri = mtri_raw * 100
+mtri_normalized = normalize_value(mtri, 0, 100)
+
+// ===== 公式3: 动态支撑阻力破裂指数 (DSRFI - Dynamic S/R Fractal Index) =====
+// 历史形态匹配度：最近5根K线与过去50根K线的相似度
+recent_range = high[0] - low[0]
+recent_close_ratio = (close - low[0]) / (high[0] - low[0] + 0.001)
+
+hist_avg_range = ta.sma(high - low, 50)
+hist_avg_close_ratio = ta.sma((close - low) / (high - low + 0.001), 50)
+
+pattern_similarity = 1.0 - (math.abs(recent_range - hist_avg_range) / (hist_avg_range + 0.001) + 
+                             math.abs(recent_close_ratio - hist_avg_close_ratio)) / 2
+pattern_similarity := math.max(0, math.min(1.0, pattern_similarity))
+
+// 破裂强度指数
+breakout_strength = (atr_val / (atr_sma + 0.001)) * math.abs(close - (high[1] + low[1]) / 2) / (high[1] - low[1] + 0.001)
+breakout_strength_norm = math.min(1.0, breakout_strength)
+
+// 成交量确认
+vol_confirm = math.min(1.0, volume / (ta.sma(volume, 20) + 0.001))
+
+// DSRFI 综合
+dsrfi_raw = pattern_similarity * breakout_strength_norm * vol_confirm
+dsrfi = dsrfi_raw * 100
+dsrfi_normalized = normalize_value(dsrfi, 0, 100)
+
+// ============================================================================
+// SECTION 5: 支撑/阻力检测 & 掛單點位計算
 // ============================================================================
 
 pivot_high = ta.pivothigh(high, sr_lookback, sr_lookback)
@@ -114,28 +171,28 @@ buy_take_profit = sell_pending_level
 sell_take_profit = buy_pending_level
 
 // ============================================================================
-// SECTION 5: ML 訓練數據準備
+// SECTION 6: ML 訓練數據準備
 // ============================================================================
 
-normalize(val, min_val, max_val) =>
+normalize_value(val, min_val, max_val) =>
     if max_val == min_val
         0.5
     else
         math.max(0, math.min(1, (val - min_val) / (max_val - min_val)))
 
-rsi_normalized = normalize(rsi_val, 0, 100)
-stoch_normalized = normalize(stoch_k_val, 0, 100)
-momentum_normalized = normalize(momentum_confluence, -100, 100)
-volatility_normalized = normalize(volatility_expansion, 0, 100)
-price_position_normalized = normalize(price_in_bands, 0, 100)
-convergence_normalized = normalize(rsi_convergence, 0, 100)
-composite_normalized = normalize(composite_signal, 0, 100)
+rsi_normalized = normalize_value(rsi_val, 0, 100)
+stoch_normalized = normalize_value(stoch_k_val, 0, 100)
+momentum_normalized = normalize_value(momentum_confluence, -100, 100)
+volatility_normalized = normalize_value(volatility_expansion, 0, 100)
+price_position_normalized = normalize_value(price_in_bands, 0, 100)
+convergence_normalized = normalize_value(rsi_convergence, 0, 100)
+composite_normalized = normalize_value(composite_signal, 0, 100)
 
 order_filled = 0.0
 order_profitable = 0.0
 
 // ============================================================================
-// SECTION 6: 繪圖
+// SECTION 7: 繪圖 - 基礎指標
 // ============================================================================
 
 plot(show_base_indicators ? rsi_val : na, title="RSI", color=color.blue, linewidth=2)
@@ -145,10 +202,34 @@ plot(show_base_indicators ? bb_basis : na, title="BB Basis", color=color.orange)
 plot(show_base_indicators ? bb_upper : na, title="BB Upper", color=color.aqua, linewidth=2)
 plot(show_base_indicators ? bb_lower : na, title="BB Lower", color=color.aqua, linewidth=2)
 
+// ============================================================================
+// SECTION 8: 繪圖 - 自創指標
+// ============================================================================
+
 plot(show_custom_indicators ? momentum_confluence : na, title="Momentum Confluence", color=color.new(color.green, 30), linewidth=2)
 plot(show_custom_indicators ? volatility_expansion : na, title="Volatility Expansion", color=color.new(color.red, 30), linewidth=2)
 plot(show_custom_indicators ? rsi_convergence : na, title="RSI Convergence", color=color.new(color.purple, 30), linewidth=2)
 plot(show_custom_indicators ? composite_signal : na, title="Composite Signal", color=color.new(color.yellow, 0), linewidth=3)
+
+// ============================================================================
+// SECTION 9: 繪圖 - 高級ML指標
+// ============================================================================
+
+plot(show_advanced_indicators ? lii : na, title="LII - Liquidity Imbalance", color=color.new(color.fuchsia, 20), linewidth=2)
+hline(75, color=color.new(color.fuchsia, 50), linestyle=hline.style_dashed, linewidth=1, title="LII High Threshold")
+hline(25, color=color.new(color.fuchsia, 50), linestyle=hline.style_dashed, linewidth=1, title="LII Low Threshold")
+
+plot(show_advanced_indicators ? mtri : na, title="MTRI - Multi-Timeframe Resonance", color=color.new(color.teal, 20), linewidth=2)
+hline(80, color=color.new(color.teal, 50), linestyle=hline.style_dashed, linewidth=1, title="MTRI Very Strong")
+hline(60, color=color.new(color.teal, 50), linestyle=hline.style_dashed, linewidth=1, title="MTRI Strong")
+
+plot(show_advanced_indicators ? dsrfi : na, title="DSRFI - Dynamic S/R Fractal", color=color.new(color.maroon, 20), linewidth=2)
+hline(85, color=color.new(color.maroon, 50), linestyle=hline.style_dashed, linewidth=1, title="DSRFI Very Strong Break")
+hline(70, color=color.new(color.maroon, 50), linestyle=hline.style_dashed, linewidth=1, title="DSRFI Strong Break")
+
+// ============================================================================
+// SECTION 10: 繪圖 - 掛單點位
+// ============================================================================
 
 plot(show_order_levels ? buy_pending_level : na, title="Buy Pending Level", color=color.lime, linewidth=2)
 plot(show_order_levels ? sell_pending_level : na, title="Sell Pending Level", color=color.red, linewidth=2)
@@ -165,12 +246,13 @@ if show_order_levels
     line.set_xy2(sell_tp_line, bar_index, sell_take_profit)
 
 // ============================================================================
-// SECTION 7: ML 數據表格顯示
+// SECTION 11: ML 數據表格顯示
 // ============================================================================
 
 if show_ml_data
-    var table ml_table = table.new(position.top_right, 2, 15, border_color=color.gray, border_width=1)
+    var table ml_table = table.new(position.top_right, 2, 25, border_color=color.gray, border_width=1)
     
+    // Header - Base Indicators
     table.cell(ml_table, 0, 0, "Base Indicators", text_color=color.white, bgcolor=color.new(color.blue, 60))
     table.cell(ml_table, 1, 0, "Value", text_color=color.white, bgcolor=color.new(color.blue, 60))
     
@@ -186,42 +268,81 @@ if show_ml_data
     table.cell(ml_table, 0, 4, "BB Width", text_color=color.white, bgcolor=color.new(color.gray, 60))
     table.cell(ml_table, 1, 4, str.tostring(math.round(bb_width, 4)), text_color=color.white, bgcolor=color.new(color.gray, 60))
     
-    table.cell(ml_table, 0, 5, "Custom Indicators", text_color=color.white, bgcolor=color.new(color.green, 60))
-    table.cell(ml_table, 1, 5, "Value", text_color=color.white, bgcolor=color.new(color.green, 60))
+    table.cell(ml_table, 0, 5, "ATR", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 5, str.tostring(math.round(atr_val, 4)), text_color=color.white, bgcolor=color.new(color.gray, 60))
     
-    table.cell(ml_table, 0, 6, "Momentum Score", text_color=color.white, bgcolor=color.new(color.gray, 60))
-    table.cell(ml_table, 1, 6, str.tostring(math.round(momentum_confluence, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    // Header - Custom Indicators
+    table.cell(ml_table, 0, 6, "Custom Indicators", text_color=color.white, bgcolor=color.new(color.green, 60))
+    table.cell(ml_table, 1, 6, "Value", text_color=color.white, bgcolor=color.new(color.green, 60))
     
-    table.cell(ml_table, 0, 7, "Volatility Index", text_color=color.white, bgcolor=color.new(color.gray, 60))
-    table.cell(ml_table, 1, 7, str.tostring(math.round(volatility_expansion, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 0, 7, "Momentum Score", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 7, str.tostring(math.round(momentum_confluence, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
     
-    table.cell(ml_table, 0, 8, "RSI Convergence", text_color=color.white, bgcolor=color.new(color.gray, 60))
-    table.cell(ml_table, 1, 8, str.tostring(math.round(rsi_convergence, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 0, 8, "Volatility Index", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 8, str.tostring(math.round(volatility_expansion, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
     
-    table.cell(ml_table, 0, 9, "Composite Signal", text_color=color.white, bgcolor=color.new(color.gray, 60))
-    table.cell(ml_table, 1, 9, str.tostring(math.round(composite_signal, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 0, 9, "RSI Convergence", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 9, str.tostring(math.round(rsi_convergence, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
     
-    table.cell(ml_table, 0, 10, "Order Levels", text_color=color.white, bgcolor=color.new(color.orange, 60))
-    table.cell(ml_table, 1, 10, "Price", text_color=color.white, bgcolor=color.new(color.orange, 60))
+    table.cell(ml_table, 0, 10, "Composite Signal", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 10, str.tostring(math.round(composite_signal, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
     
-    table.cell(ml_table, 0, 11, "Buy Pending", text_color=color.white, bgcolor=color.new(color.gray, 60))
-    table.cell(ml_table, 1, 11, str.tostring(math.round(buy_pending_level, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    // Header - Advanced ML Indicators
+    table.cell(ml_table, 0, 11, "Advanced ML Indicators", text_color=color.white, bgcolor=color.new(color.purple, 60))
+    table.cell(ml_table, 1, 11, "Value", text_color=color.white, bgcolor=color.new(color.purple, 60))
     
-    table.cell(ml_table, 0, 12, "Sell Pending", text_color=color.white, bgcolor=color.new(color.gray, 60))
-    table.cell(ml_table, 1, 12, str.tostring(math.round(sell_pending_level, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 0, 12, "LII (Liquidity Imbalance)", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 12, str.tostring(math.round(lii, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
     
-    table.cell(ml_table, 0, 13, "Buy Stop Loss", text_color=color.white, bgcolor=color.new(color.gray, 60))
-    table.cell(ml_table, 1, 13, str.tostring(math.round(buy_stop_loss, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 0, 13, "MTRI (Multi-Timeframe)", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 13, str.tostring(math.round(mtri, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
     
-    table.cell(ml_table, 0, 14, "Sell Stop Loss", text_color=color.white, bgcolor=color.new(color.gray, 60))
-    table.cell(ml_table, 1, 14, str.tostring(math.round(sell_stop_loss, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 0, 14, "DSRFI (S/R Fractal)", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 14, str.tostring(math.round(dsrfi, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    // Header - Order Levels
+    table.cell(ml_table, 0, 15, "Order Levels", text_color=color.white, bgcolor=color.new(color.orange, 60))
+    table.cell(ml_table, 1, 15, "Price", text_color=color.white, bgcolor=color.new(color.orange, 60))
+    
+    table.cell(ml_table, 0, 16, "Buy Pending", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 16, str.tostring(math.round(buy_pending_level, 6)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    table.cell(ml_table, 0, 17, "Sell Pending", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 17, str.tostring(math.round(sell_pending_level, 6)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    table.cell(ml_table, 0, 18, "Buy TP", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 18, str.tostring(math.round(buy_take_profit, 6)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    table.cell(ml_table, 0, 19, "Sell TP", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 19, str.tostring(math.round(sell_take_profit, 6)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    table.cell(ml_table, 0, 20, "Buy Stop Loss", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 20, str.tostring(math.round(buy_stop_loss, 6)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    table.cell(ml_table, 0, 21, "Sell Stop Loss", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 21, str.tostring(math.round(sell_stop_loss, 6)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    // Header - Normalized Values for ML
+    table.cell(ml_table, 0, 22, "ML Normalized (0-1)", text_color=color.white, bgcolor=color.new(color.teal, 60))
+    table.cell(ml_table, 1, 22, "Score", text_color=color.white, bgcolor=color.new(color.teal, 60))
+    
+    table.cell(ml_table, 0, 23, "LII Norm | MTRI Norm", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 23, str.tostring(math.round(lii_normalized, 3)) + " | " + str.tostring(math.round(mtri_normalized, 3)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    table.cell(ml_table, 0, 24, "DSRFI Norm | Composite", text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(ml_table, 1, 24, str.tostring(math.round(dsrfi_normalized, 3)) + " | " + str.tostring(math.round(composite_normalized, 3)), text_color=color.white, bgcolor=color.new(color.gray, 60))
 
 // ============================================================================
-// SECTION 8: 警報和信號
+// SECTION 12: 警報和信號
 // ============================================================================
 
-buy_signal = composite_signal < -50 and rsi_val < 30 and stoch_k_val < 20
-sell_signal = composite_signal > 50 and rsi_val > 70 and stoch_k_val > 80
+buy_signal = composite_signal < -50 and rsi_val < 30 and stoch_k_val < 20 and lii > 70
+sell_signal = composite_signal > 50 and rsi_val > 70 and stoch_k_val > 80 and lii > 70
+
+strong_buy = buy_signal and mtri > 70 and dsrfi > 75
+strong_sell = sell_signal and mtri > 70 and dsrfi > 75
 
 alertcondition(buy_signal, title="BUY Pending Order Setup", message="Buy pending order setup identified at {{close}}")
 alertcondition(sell_signal, title="SELL Pending Order Setup", message="Sell pending order setup identified at {{close}}")
+alertcondition(strong_buy, title="STRONG BUY Signal - ML Confirmed", message="Strong buy confirmed by MTRI + DSRFI at {{close}}")
+alertcondition(strong_sell, title="STRONG SELL Signal - ML Confirmed", message="Strong sell confirmed by MTRI + DSRFI at {{close}}")
