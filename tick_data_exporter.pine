@@ -1,0 +1,237 @@
+//@version=5
+indicator("Tick Data Exporter - Export to CSV", overlay=false, max_bars_back=5000)
+
+// ============================================================================
+// SECTION 1: 参数配置
+// ============================================================================
+
+// 选择要导出的数据类型
+export_type = input.string("COMPLETE", 
+    title="Export Data Type",
+    options=["OHLCV", "INDICATORS", "COMPLETE"],
+    group="Export Settings")
+
+// 是否包含自定义指标
+include_custom = input.bool(true, title="Include Custom Indicators", group="Export Settings")
+include_advanced = input.bool(true, title="Include Advanced ML Indicators", group="Export Settings")
+
+// RSI设置
+rsi_length = input.int(14, title="RSI Length", minval=2, maxval=100, group="Indicators")
+
+// BB设置
+bb_length = input.int(20, title="BB Length", minval=1, maxval=500, group="Indicators")
+bb_mult = input.float(2.0, title="BB StdDev", minval=0.1, maxval=5, step=0.1, group="Indicators")
+
+// MACD设置
+macd_fast = input.int(12, title="MACD Fast", minval=1, maxval=100, group="Indicators")
+macd_slow = input.int(26, title="MACD Slow", minval=1, maxval=100, group="Indicators")
+macd_signal = input.int(9, title="MACD Signal", minval=1, maxval=100, group="Indicators")
+
+// ATR设置
+atr_length = input.int(14, title="ATR Length", minval=1, maxval=100, group="Indicators")
+
+// ============================================================================
+// SECTION 2: 计算所有指标
+// ============================================================================
+
+// 基础指标
+rsi_val = ta.rsi(close, rsi_length)
+
+bb_basis = ta.ema(close, bb_length)
+bb_dev = bb_mult * ta.stdev(close, bb_length)
+bb_upper = bb_basis + bb_dev
+bb_lower = bb_basis - bb_dev
+bb_width = bb_upper - bb_lower
+
+[macd_line, signal_line, macd_hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+
+stoch_k = ta.highest(high, rsi_length)
+stoch_l = ta.lowest(low, rsi_length)
+stoch_raw_k = 100 * (close - stoch_l) / (stoch_k - stoch_l)
+stoch_k_val = ta.sma(stoch_raw_k, 3)
+stoch_d_val = ta.sma(stoch_k_val, 3)
+
+atr_val = ta.atr(atr_length)
+atr_sma = ta.sma(atr_val, 50)
+
+// 自创指标
+momentum_confluence = 0.0
+if rsi_val > 70
+    momentum_confluence += 33.33
+if stoch_k_val > 80
+    momentum_confluence += 33.33
+if macd_line > signal_line and macd_hist > 0
+    momentum_confluence += 33.33
+
+if rsi_val < 30
+    momentum_confluence -= 33.33
+if stoch_k_val < 20
+    momentum_confluence -= 33.33
+if macd_line < signal_line and macd_hist < 0
+    momentum_confluence -= 33.33
+
+momentum_confluence := math.max(-100, math.min(100, momentum_confluence))
+
+bb_width_sma = ta.sma(bb_width, 20)
+volatility_expansion = math.min(100, (bb_width / (bb_width_sma + 0.0001)) * 50)
+
+price_in_bands = 50.0
+if bb_upper != bb_lower
+    price_in_bands := ((close - bb_lower) / (bb_upper - bb_lower)) * 100
+price_in_bands := math.max(0, math.min(100, price_in_bands))
+
+rsi_bb_basis = ta.ema(rsi_val, bb_length)
+rsi_bb_dev = bb_mult * ta.stdev(rsi_val, bb_length)
+rsi_bb_upper = rsi_bb_basis + rsi_bb_dev
+rsi_bb_lower = rsi_bb_basis - rsi_bb_dev
+rsi_dispersion_zone = ((rsi_bb_upper - rsi_bb_lower) * 0.1)
+rsi_above_upper = rsi_val > (rsi_bb_basis + rsi_dispersion_zone) ? 100 : 0
+rsi_below_lower = rsi_val < (rsi_bb_basis - rsi_dispersion_zone) ? 100 : 0
+rsi_convergence = (rsi_above_upper + rsi_below_lower) / 2
+
+composite_signal = (momentum_confluence + volatility_expansion + rsi_convergence) / 3
+
+// ============================================================================
+// SECTION 3: 计算3个高级ML指标
+// ============================================================================
+
+// 辅助函数
+normalize_value(val, min_val, max_val) =>
+    if max_val == min_val
+        0.5
+    else
+        math.max(0, math.min(1, (val - min_val) / (max_val - min_val)))
+
+// LII - 流动性失衡指数
+lii_range = high - low
+lii_sum = high + low + 0.001
+lii_vol_ratio = volume / ta.sma(volume, 20)
+lii_base = (lii_range / lii_sum) * lii_vol_ratio
+lii = math.min(100, lii_base * 100)
+
+// MTRI - 多时间框架共鸣指数
+rsi_resonance = math.abs(rsi_val - 50) / 50
+macd_range = math.abs(macd_line - signal_line)
+macd_resonance = macd_range / (atr_val + 0.001)
+macd_resonance_norm = math.min(1.0, macd_resonance * 0.5)
+roc_val = (close - close[12]) / close[12]
+momentum_resonance = math.abs(roc_val) * 10
+momentum_resonance_norm = math.min(1.0, momentum_resonance)
+mtri_raw = (rsi_resonance + macd_resonance_norm + momentum_resonance_norm) / 3
+mtri = mtri_raw * 100
+
+// DSRFI - 动态支撑阻力破裂指数
+recent_range = high[0] - low[0]
+recent_close_ratio = (close - low[0]) / (high[0] - low[0] + 0.001)
+hist_avg_range = ta.sma(high - low, 50)
+hist_avg_close_ratio = ta.sma((close - low) / (high - low + 0.001), 50)
+pattern_similarity = 1.0 - (math.abs(recent_range - hist_avg_range) / (hist_avg_range + 0.001) + 
+                             math.abs(recent_close_ratio - hist_avg_close_ratio)) / 2
+pattern_similarity := math.max(0, math.min(1.0, pattern_similarity))
+breakout_strength = (atr_val / (atr_sma + 0.001)) * math.abs(close - (high[1] + low[1]) / 2) / (high[1] - low[1] + 0.001)
+breakout_strength_norm = math.min(1.0, breakout_strength)
+vol_confirm = math.min(1.0, volume / (ta.sma(volume, 20) + 0.001))
+dsrfi_raw = pattern_similarity * breakout_strength_norm * vol_confirm
+dsrfi = dsrfi_raw * 100
+
+// ============================================================================
+// SECTION 4: 构建CSV格式数据
+// ============================================================================
+
+// CSV Header (这个应该显示一次在最上面)
+header_line = "DateTime,Open,High,Low,Close,Volume,Time,RSI,Stoch%K,Stoch%D,MACD,Signal,MACD_Hist,BB_Upper,BB_Basis,BB_Lower,ATR,MomentumScore,VolatilityIndex,RSI_Convergence,CompositeSignal,LII,MTRI,DSRFI"
+
+// CSV Data line
+csv_data = str.format(
+    "{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22},{23}",
+    str.tostring(time),
+    str.tostring(math.round(open, 5)),
+    str.tostring(math.round(high, 5)),
+    str.tostring(math.round(low, 5)),
+    str.tostring(math.round(close, 5)),
+    str.tostring(volume),
+    str.tostring(time),
+    str.tostring(math.round(rsi_val, 2)),
+    str.tostring(math.round(stoch_k_val, 2)),
+    str.tostring(math.round(stoch_d_val, 2)),
+    str.tostring(math.round(macd_line, 4)),
+    str.tostring(math.round(signal_line, 4)),
+    str.tostring(math.round(macd_hist, 4)),
+    str.tostring(math.round(bb_upper, 5)),
+    str.tostring(math.round(bb_basis, 5)),
+    str.tostring(math.round(bb_lower, 5)),
+    str.tostring(math.round(atr_val, 4)),
+    str.tostring(math.round(momentum_confluence, 2)),
+    str.tostring(math.round(volatility_expansion, 2)),
+    str.tostring(math.round(rsi_convergence, 2)),
+    str.tostring(math.round(composite_signal, 2)),
+    str.tostring(math.round(lii, 2)),
+    str.tostring(math.round(mtri, 2)),
+    str.tostring(math.round(dsrfi, 2))
+)
+
+// ============================================================================
+// SECTION 5: 数据输出到表格
+// ============================================================================
+
+var table data_table = table.new(position.top_right, 3, 30, 
+    border_color=color.gray, 
+    border_width=1,
+    frame_color=color.blue,
+    frame_width=2)
+
+if barstate.islast
+    // 标题
+    table.cell(data_table, 0, 0, "Real-Time Tick Data", 
+        text_color=color.white, 
+        bgcolor=color.new(color.blue, 60),
+        text_size=size.large)
+    
+    // 当前K线信息
+    table.cell(data_table, 0, 1, "Bar #: " + str.tostring(bar_index), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(data_table, 1, 1, str.tostring(time), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(data_table, 2, 1, "Close: " + str.tostring(math.round(close, 5)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    // 基础指标
+    table.cell(data_table, 0, 2, "Base Indicators", text_color=color.white, bgcolor=color.new(color.green, 60))
+    table.cell(data_table, 0, 3, "RSI: " + str.tostring(math.round(rsi_val, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(data_table, 1, 3, "Stoch: " + str.tostring(math.round(stoch_k_val, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(data_table, 2, 3, "MACD: " + str.tostring(math.round(macd_line, 4)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    // 自创指标
+    table.cell(data_table, 0, 4, "Custom Indicators", text_color=color.white, bgcolor=color.new(color.teal, 60))
+    table.cell(data_table, 0, 5, "Momentum: " + str.tostring(math.round(momentum_confluence, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(data_table, 1, 5, "Volatility: " + str.tostring(math.round(volatility_expansion, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(data_table, 2, 5, "RSI Conv: " + str.tostring(math.round(rsi_convergence, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    // 高级ML指标
+    table.cell(data_table, 0, 6, "Advanced ML Indicators", text_color=color.white, bgcolor=color.new(color.purple, 60))
+    table.cell(data_table, 0, 7, "LII: " + str.tostring(math.round(lii, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(data_table, 1, 7, "MTRI: " + str.tostring(math.round(mtri, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    table.cell(data_table, 2, 7, "DSRFI: " + str.tostring(math.round(dsrfi, 2)), text_color=color.white, bgcolor=color.new(color.gray, 60))
+    
+    // CSV数据（用于复制)
+    table.cell(data_table, 0, 8, "CSV Data (Copy):", text_color=color.white, bgcolor=color.new(color.orange, 60))
+    
+    // 显示每一行数据
+    rows = str.split(csv_data, ",")
+    row_count = array.size(rows)
+    for i = 0 to math.min(row_count - 1, 15)
+        table.cell(data_table, i % 3, 9 + (i / 3), 
+            array.get(rows, i),
+            text_color=color.white,
+            bgcolor=color.new(color.gray, 60),
+            text_size=size.small)
+
+// ============================================================================
+// SECTION 6: 警告消息提示导出步骤
+// ============================================================================
+
+if barstate.islast
+    // 显示导出步骤
+    alert_text = "Tick Data Export Instructions:\n" +
+        "1. Right-click on chart\n" +
+        "2. Select 'Data Window'\n" +
+        "3. Copy all data\n" +
+        "4. Paste into Excel/CSV file\n" +
+        "5. Save as: trading_data.csv"
