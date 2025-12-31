@@ -150,10 +150,19 @@ plot(show_custom_indicators ? volatility_expansion : na, title="Volatility Expan
 plot(show_custom_indicators ? rsi_convergence : na, title="RSI Convergence", color=color.new(color.purple, 30), linewidth=2)
 plot(show_custom_indicators ? composite_signal : na, title="Composite Signal", color=color.new(color.yellow, 0), linewidth=3)
 
-plot(show_order_levels ? buy_pending_level : na, title="Buy Pending Level", color=color.lime, linewidth=2, style=plot.style_linebr)
-plot(show_order_levels ? sell_pending_level : na, title="Sell Pending Level", color=color.red, linewidth=2, style=plot.style_linebr)
-plot(show_order_levels ? buy_take_profit : na, title="Buy TP", color=color.new(color.lime, 50), linewidth=1, style=plot.style_dashed)
-plot(show_order_levels ? sell_take_profit : na, title="Sell TP", color=color.new(color.red, 50), linewidth=1, style=plot.style_dashed)
+plot(show_order_levels ? buy_pending_level : na, title="Buy Pending Level", color=color.lime, linewidth=2)
+plot(show_order_levels ? sell_pending_level : na, title="Sell Pending Level", color=color.red, linewidth=2)
+
+// 使用 line.new() 繪製虛線 (plot() 不支援虛線)
+var buy_tp_line = line.new(na, na, na, na, extend=extend.right, style=line.style_dashed, color=color.new(color.lime, 50), width=1)
+var sell_tp_line = line.new(na, na, na, na, extend=extend.right, style=line.style_dashed, color=color.new(color.red, 50), width=1)
+
+if show_order_levels
+    line.set_xy1(buy_tp_line, bar_index, buy_take_profit)
+    line.set_xy2(buy_tp_line, bar_index, buy_take_profit)
+    
+    line.set_xy1(sell_tp_line, bar_index, sell_take_profit)
+    line.set_xy2(sell_tp_line, bar_index, sell_take_profit)
 
 // ============================================================================
 // SECTION 7: ML 數據表格顯示
