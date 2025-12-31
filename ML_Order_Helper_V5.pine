@@ -5,33 +5,26 @@ indicator("ML Order Helper - Pending Order Placement & ML Training Data", overla
 // SECTION 1: 基礎指標輸入參數
 // ============================================================================
 
-// RSI 參數
 rsi_src = input(close, title="RSI Source", group="RSI Settings")
 rsi_length = input.int(14, title="RSI Length", minval=2, maxval=100, group="RSI Settings")
 
-// Bollinger Bands 參數
 bb_src = input(close, title="BB Source", group="Bollinger Bands")
 bb_length = input.int(20, title="BB Length", minval=1, maxval=500, group="Bollinger Bands")
 bb_mult = input.float(2.0, title="BB StdDev", minval=0.1, maxval=5, step=0.1, group="Bollinger Bands")
 
-// MACD 參數
 macd_fast = input.int(12, title="MACD Fast", minval=1, maxval=100, group="MACD Settings")
 macd_slow = input.int(26, title="MACD Slow", minval=1, maxval=100, group="MACD Settings")
 macd_signal = input.int(9, title="MACD Signal", minval=1, maxval=100, group="MACD Settings")
 
-// Stochastic 參數
 stoch_k = input.int(14, title="Stoch %K", minval=1, maxval=100, group="Stochastic Settings")
 stoch_d = input.int(3, title="Stoch %D", minval=1, maxval=100, group="Stochastic Settings")
 stoch_smooth = input.int(3, title="Stoch Smooth", minval=1, maxval=100, group="Stochastic Settings")
 
-// ATR 參數（用於掛單距離）
 atr_length = input.int(14, title="ATR Length", minval=1, maxval=100, group="ATR Settings")
 
-// 支撐/阻力檢測參數
 sr_lookback = input.int(5, title="S/R Lookback Bars", minval=2, maxval=50, group="Support/Resistance")
 sr_sensitivity = input.float(0.3, title="S/R Sensitivity (%)", minval=0.1, maxval=5.0, step=0.1, group="Support/Resistance")
 
-// 輸出控制
 show_base_indicators = input.bool(true, title="Show Base Indicators", group="Display")
 show_custom_indicators = input.bool(true, title="Show Custom Indicators", group="Display")
 show_order_levels = input.bool(true, title="Show Pending Order Levels", group="Display")
@@ -41,34 +34,27 @@ show_ml_data = input.bool(true, title="Show ML Data Table", group="Display")
 // SECTION 2: 計算基礎指標
 // ============================================================================
 
-// RSI 計算
 rsi_val = ta.rsi(rsi_src, rsi_length)
 
-// Bollinger Bands 計算
 bb_basis = ta.ema(bb_src, bb_length)
 bb_dev = bb_mult * ta.stdev(bb_src, bb_length)
 bb_upper = bb_basis + bb_dev
 bb_lower = bb_basis - bb_dev
 
-// MACD 計算
 [macd_line, signal_line, macd_hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
 
-// Stochastic 計算
 stoch_high = ta.highest(high, stoch_k)
 stoch_low = ta.lowest(low, stoch_k)
 stoch_raw_k = 100 * (close - stoch_low) / (stoch_high - stoch_low)
 stoch_k_val = ta.sma(stoch_raw_k, stoch_smooth)
 stoch_d_val = ta.sma(stoch_k_val, stoch_d)
 
-// ATR 計算
 atr_val = ta.atr(atr_length)
 
 // ============================================================================
 // SECTION 3: 計算自創指標
 // ============================================================================
 
-// 1. Momentum Confluence Score (0-100)
-// 結合 RSI、Stochastic、MACD 的動量評分
 momentum_confluence = 0.0
 if rsi_val > 70
     momentum_confluence += 33.33
@@ -84,23 +70,17 @@ if stoch_k_val < 20
 if macd_line < signal_line and macd_hist < 0
     momentum_confluence -= 33.33
 
-momentum_confluence = math.max(-100, math.min(100, momentum_confluence))
+momentum_confluence := math.max(-100, math.min(100, momentum_confluence))
 
-// 2. Volatility Expansion Index (0-100)
-// 根據布林帶寬度判斷波動率
 bb_width = bb_upper - bb_lower
 bb_width_sma = ta.sma(bb_width, 20)
 volatility_expansion = math.min(100, (bb_width / bb_width_sma) * 50)
 
-// 3. Price Position in Bands (0-100)
-// 價格在布林帶中的位置
 price_in_bands = 50.0
 if bb_upper != bb_lower
-    price_in_bands = ((close - bb_lower) / (bb_upper - bb_lower)) * 100
-price_in_bands = math.max(0, math.min(100, price_in_bands))
+    price_in_bands := ((close - bb_lower) / (bb_upper - bb_lower)) * 100
+price_in_bands := math.max(0, math.min(100, price_in_bands))
 
-// 4. RSI Bollinger Bands Convergence (0-100)
-// RSI 與其布林帶的融合度
 rsi_bb_basis = ta.ema(rsi_val, bb_length)
 rsi_bb_dev = bb_mult * ta.stdev(rsi_val, bb_length)
 rsi_bb_upper = rsi_bb_basis + rsi_bb_dev
@@ -110,36 +90,26 @@ rsi_above_upper = rsi_val > (rsi_bb_basis + rsi_dispersion_zone) ? 100 : 0
 rsi_below_lower = rsi_val < (rsi_bb_basis - rsi_dispersion_zone) ? 100 : 0
 rsi_convergence = (rsi_above_upper + rsi_below_lower) / 2
 
-// 5. Composite Trading Signal (0-100)
-// 綜合交易信號
 composite_signal = (momentum_confluence + volatility_expansion + rsi_convergence) / 3
 
 // ============================================================================
 // SECTION 4: 支撐/阻力檢測 & 掛單點位計算
 // ============================================================================
 
-// 檢測高點和低點（拐點）
 pivot_high = ta.pivothigh(high, sr_lookback, sr_lookback)
 pivot_low = ta.pivotlow(low, sr_lookback, sr_lookback)
 
-// 計算最近的支撐和阻力
 recent_high = ta.highest(high, sr_lookback * 2)
 recent_low = ta.lowest(low, sr_lookback * 2)
 
-// 掛單距離 (使用 ATR 的百分比)
 pending_offset = atr_val * 0.5
 
-// 買單掛單點位（在支撐下方）
 buy_pending_level = recent_low - pending_offset
-
-// 賣單掛單點位（在阻力上方）
 sell_pending_level = recent_high + pending_offset
 
-// 止損點位
 buy_stop_loss = buy_pending_level - (atr_val * 1.0)
 sell_stop_loss = sell_pending_level + (atr_val * 1.0)
 
-// 獲利點位（1:2 風險回報比）
 buy_take_profit = sell_pending_level
 sell_take_profit = buy_pending_level
 
@@ -147,14 +117,12 @@ sell_take_profit = buy_pending_level
 // SECTION 5: ML 訓練數據準備
 // ============================================================================
 
-// 標準化函數 (0-1)
 normalize(val, min_val, max_val) =>
     if max_val == min_val
         0.5
     else
         math.max(0, math.min(1, (val - min_val) / (max_val - min_val)))
 
-// 計算訓練特徵
 rsi_normalized = normalize(rsi_val, 0, 100)
 stoch_normalized = normalize(stoch_k_val, 0, 100)
 momentum_normalized = normalize(momentum_confluence, -100, 100)
@@ -163,8 +131,6 @@ price_position_normalized = normalize(price_in_bands, 0, 100)
 convergence_normalized = normalize(rsi_convergence, 0, 100)
 composite_normalized = normalize(composite_signal, 0, 100)
 
-// 掛單有效性標籤 (未來使用，目前為 0)
-// 可以根據歷史數據標記掛單是否被觸發和盈利
 order_filled = 0.0
 order_profitable = 0.0
 
@@ -172,21 +138,18 @@ order_profitable = 0.0
 // SECTION 6: 繪圖
 // ============================================================================
 
-// 基礎指標圖表
 plot(show_base_indicators ? rsi_val : na, title="RSI", color=color.blue, linewidth=2)
-plot(show_base_indicators ? 70 : na, title="RSI Upper", color=color.gray, linestyle=hline.style_dotted)
-plot(show_base_indicators ? 30 : na, title="RSI Lower", color=color.gray, linestyle=hline.style_dotted)
+hline(70, color=color.gray, linestyle=hline.style_dotted, linewidth=1, title="RSI Upper")
+hline(30, color=color.gray, linestyle=hline.style_dotted, linewidth=1, title="RSI Lower")
 plot(show_base_indicators ? bb_basis : na, title="BB Basis", color=color.orange)
 plot(show_base_indicators ? bb_upper : na, title="BB Upper", color=color.aqua, linewidth=2)
 plot(show_base_indicators ? bb_lower : na, title="BB Lower", color=color.aqua, linewidth=2)
 
-// 自創指標
 plot(show_custom_indicators ? momentum_confluence : na, title="Momentum Confluence", color=color.new(color.green, 30), linewidth=2)
 plot(show_custom_indicators ? volatility_expansion : na, title="Volatility Expansion", color=color.new(color.red, 30), linewidth=2)
 plot(show_custom_indicators ? rsi_convergence : na, title="RSI Convergence", color=color.new(color.purple, 30), linewidth=2)
 plot(show_custom_indicators ? composite_signal : na, title="Composite Signal", color=color.new(color.yellow, 0), linewidth=3)
 
-// 掛單點位
 plot(show_order_levels ? buy_pending_level : na, title="Buy Pending Level", color=color.lime, linewidth=2, style=plot.style_linebr)
 plot(show_order_levels ? sell_pending_level : na, title="Sell Pending Level", color=color.red, linewidth=2, style=plot.style_linebr)
 plot(show_order_levels ? buy_take_profit : na, title="Buy TP", color=color.new(color.lime, 50), linewidth=1, style=plot.style_dashed)
@@ -248,7 +211,6 @@ if show_ml_data
 // SECTION 8: 警報和信號
 // ============================================================================
 
-// 掛單機會信號
 buy_signal = composite_signal < -50 and rsi_val < 30 and stoch_k_val < 20
 sell_signal = composite_signal > 50 and rsi_val > 70 and stoch_k_val > 80
 
