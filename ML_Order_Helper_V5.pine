@@ -2,6 +2,16 @@
 indicator("ML Order Helper - Advanced Indicators & ML Training Data", overlay=false, max_bars_back=500)
 
 // ============================================================================
+// SECTION 0: 辅助函数定义 (必须放在最前面)
+// ============================================================================
+
+normalize_value(val, min_val, max_val) =>
+    if max_val == min_val
+        0.5
+    else
+        math.max(0, math.min(1, (val - min_val) / (max_val - min_val)))
+
+// ============================================================================
 // SECTION 1: 基础指标输入参数
 // ============================================================================
 
@@ -171,14 +181,8 @@ buy_take_profit = sell_pending_level
 sell_take_profit = buy_pending_level
 
 // ============================================================================
-// SECTION 6: ML 訓練數據準備
+// SECTION 6: ML 訓練數據準備 - 標準化特徵
 // ============================================================================
-
-normalize_value(val, min_val, max_val) =>
-    if max_val == min_val
-        0.5
-    else
-        math.max(0, math.min(1, (val - min_val) / (max_val - min_val)))
 
 rsi_normalized = normalize_value(rsi_val, 0, 100)
 stoch_normalized = normalize_value(stoch_k_val, 0, 100)
